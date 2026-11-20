@@ -132,7 +132,23 @@ private suspend fun readConnectedAndroid(client: AdbClient): List<DeviceInfo> {
     val vbmeta = prop("ro.boot.vbmeta.device_state")
     val verified = prop("ro.boot.verifiedbootstate")
     val batteryText = client.shell("dumpsys battery").text()
-    val batteryLevel = Regex("(?m)^\\s*level:\\s*(\\d+)").find(batteryText)?.groupValues?.getOrNull(1)
+    fun batteryField(name: String): String =
+        Regex("(?m)^\\\\s*$name:\\\\s*(.+)$", RegexOption.IGNORE_CASE)
+            .find(batteryText)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+    val batteryLevel = Regex("(?m)^\\\\s*level:\\\\s*(\\\\d+)").find(batteryText)?.groupValues?.getOrNull(1)
+    val batteryTemp = batteryField("temperature").toIntOrNull()?.let { "%.1f °C".format(it / 10.0) } ?: "Недоступно"
+    val batteryHealth = when (batteryField("health")) {
+        "2" -> "Норма"; "3" -> "Перегрев"; "4" -> "Неисправность"; "5" -> "Перенапряжение"; "6" -> "Неизвестная ошибка"; else -> "Не определено"
+    }
+    val batteryStatus = when (batteryField("status")) {
+        "2" -> "Заряжается"; "3" -> "Разряжается"; "4" -> "Не заряжается"; "5" -> "Полный заряд"; else -> "Неизвестно"
+    }
+    val screenSize = client.shell("wm size").text().trim().lines().lastOrNull().orEmpty().ifBlank { "Недоступно" }
+    val screenDensity = client.shell("wm density").text().trim().lines().lastOrNull().orEmpty().ifBlank { "Недоступно" }
+    val bootMode = prop("ro.bootmode")
+    val selinux = client.shell("getenforce").text().trim().ifBlank { "Недоступно" }
+    val uptime = client.shell("cat /proc/uptime").text().trim().substringBefore(" ").toDoubleOrNull()
+        ?.let { "${(it / 3600).toInt()} ч ${(it % 3600 / 60).toInt()} мин" } ?: "Недоступно"
     val dfText = client.shell("df -k /data").text().lines().filter { it.isNotBlank() }
     val df = dfText.lastOrNull()?.trim()?.split(Regex("\\s+"))
     val storage = if (df != null && df.size >= 4) {
@@ -147,7 +163,11 @@ private suspend fun readConnectedAndroid(client: AdbClient): List<DeviceInfo> {
         DeviceInfo("Сборка", display), DeviceInfo("Отпечаток сборки", fingerprint),
         DeviceInfo("Патч безопасности", patch), DeviceInfo("Архитектура", abis),
         DeviceInfo("Уровень батареи", batteryLevel?.let { "$it%" } ?: "Недоступно"),
-        DeviceInfo("Память", storage), DeviceInfo("Bootloader locked (ro.boot.flash.locked)", locked),
+        DeviceInfo("Температура батареи", batteryTemp), DeviceInfo("Состояние батареи", batteryHealth),
+        DeviceInfo("Статус зарядки", batteryStatus), DeviceInfo("Память", storage),
+        DeviceInfo("Разрешение экрана", screenSize), DeviceInfo("Плотность экрана", screenDensity),
+        DeviceInfo("Режим загрузки", bootMode), DeviceInfo("SELinux", selinux), DeviceInfo("Время работы", uptime),
+        DeviceInfo("Bootloader locked (ro.boot.flash.locked)", locked),
         DeviceInfo("VBMeta device state", vbmeta), DeviceInfo("Verified boot state", verified)
     )
 }
@@ -494,65 +514,138 @@ private fun UsbScreen(
 }
 
 @Composable
-private fun FirmwareScreen(context: Context, info: List<DeviceInfo>, remoteInfo: List<DeviceInfo>, modifier: Modifier = Modifier) {
+private fun FirmwareScreen(
+    context: Context,
+    info: List<DeviceInfo>,
+    remoteInfo: List<DeviceInfo>,
+    modifier: Modifier = Modifier
+) {
+    // Firmware discovery must target the ADB-authorized USB phone only.
+    // Never silently fall back to the phone running this app.
     val usingRemote = remoteInfo.isNotEmpty()
-    val source = if (usingRemote) remoteInfo else info
-    val model = remoteValue(source, "Модель").ifBlank { "Android" }
-    val device = remoteValue(source, "Код устройства")
-    val xiaomi = if (usingRemote) isRemoteRedmiNote14FourG(source) else isRedmiNote14FourG()
-    val codename = if (usingRemote) remoteCodename(source) else inferredCodename()
-    val region = if (usingRemote) detectedXiaomiRegion("${remoteValue(source, "Сборка")} ${remoteValue(source, "Отпечаток сборки")}") else detectedXiaomiRegion()
+    val manufacturer = remoteValue(remoteInfo, "Производитель").ifBlank { "Не определён" }
+    val model = remoteValue(remoteInfo, "Модель").ifBlank { "Не определена" }
+    val device = remoteValue(remoteInfo, "Код устройства").ifBlank { "Не определён" }
+    val product = remoteValue(remoteInfo, "Продукт").ifBlank { "Не определён" }
+    val build = remoteValue(remoteInfo, "Сборка").ifBlank { "Не определена" }
+    val fingerprint = remoteValue(remoteInfo, "Отпечаток сборки").ifBlank { "Не определён" }
+    val identity = "$manufacturer $model $device $product".lowercase()
+    val isXiaomi = "xiaomi" in identity || "redmi" in identity || "poco" in identity
+    val region = detectedXiaomiRegion("$build $fingerprint")
+    val codename = device
 
-    Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Поиск совместимых прошивок", style = MaterialTheme.typography.headlineSmall)
-        Text("Поиск использует модель, код устройства и регион сборки. Совпадение названия само по себе не подтверждает совместимость.")
+    fun launchSearch(query: String) {
+        val encoded = Uri.encode(query)
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$encoded"))
+        context.startActivity(intent)
+    }
+
+    Column(
+        modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("Поиск прошивки подключённого телефона", style = MaterialTheme.typography.headlineSmall)
+        Text(
+            "Поиск строится по данным второго телефона, полученным через USB ADB. " +
+                "Телефон, на котором запущено приложение, для этого поиска не используется."
+        )
+
         ElevatedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(if (usingRemote) "Профиль подключённого телефона (ADB)" else "Профиль телефона с приложением", style = MaterialTheme.typography.titleMedium)
-                Text("Модель: $model")
-                Text("Build.DEVICE: $device")
-                if (xiaomi) {
-                    Text("Профиль: Redmi Note 14 4G")
-                    Text("Codename: $codename")
-                    Text("Регион ПО: $region")
+                Text("Целевое устройство", style = MaterialTheme.typography.titleMedium)
+                if (usingRemote) {
+                    Text("Производитель: $manufacturer")
+                    Text("Модель: $model")
+                    Text("Код устройства: $device")
+                    Text("Продукт: $product")
+                    Text("Номер сборки: $build")
+                    Text("Build fingerprint: $fingerprint", style = MaterialTheme.typography.bodySmall)
+                    if (isXiaomi) {
+                        Text("Регион прошивки: $region")
+                    }
+                    Text(
+                        "Источник данных: подключённый телефон через ADB",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelMedium
+                    )
                 } else {
-                    Text("Профиль Xiaomi Redmi Note 14 4G не подтверждён.")
+                    Text(
+                        "Телефон пока не авторизован через ADB. Откройте вкладку USB, подключите устройство, " +
+                            "разрешите USB-доступ и подтвердите RSA-ключ на втором телефоне. " +
+                            "После подключения вернитесь сюда.",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Text(
+                        "Поиск отключён, чтобы случайно не искать прошивку Redmi-хоста вместо подключённого телефона.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
         }
-        Button(onClick = {
-            val queryText = if (xiaomi) {
-                "$model $codename $region official Xiaomi firmware ROM"
-            } else {
-                "$model $device official firmware ROM"
-            }
-            val query = android.net.Uri.encode(queryText)
-            val intent = android.content.Intent(
-                android.content.Intent.ACTION_VIEW,
-                android.net.Uri.parse("https://www.google.com/search?q=$query")
-            )
-            context.startActivity(intent)
-        }, modifier = Modifier.fillMaxWidth()) {
+
+        Button(
+            onClick = {
+                val query = if (isXiaomi) {
+                    "official stock firmware ROM download $manufacturer $model codename $codename product $product region $region build $build"
+                } else {
+                    "official stock firmware download $manufacturer $model device $device product $product build $build"
+                }
+                launchSearch(query)
+            },
+            enabled = usingRemote,
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Icon(Icons.Default.Search, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Найти подходящие прошивки")
+            Text("Найти прошивку этого телефона")
         }
-        if (xiaomi) {
+
+        OutlinedButton(
+            onClick = {
+                launchSearch("\"$manufacturer\" \"$model\" \"$device\" \"$product\" stock ROM firmware")
+            },
+            enabled = usingRemote,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Искать по модели и codename")
+        }
+
+        OutlinedButton(
+            onClick = {
+                launchSearch("\"$fingerprint\" firmware download")
+            },
+            enabled = usingRemote && fingerprint != "Не определён",
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Искать по точной сборке")
+        }
+
+        if (usingRemote && isXiaomi) {
             OutlinedButton(
                 onClick = {
-                    val intent = android.content.Intent(
-                        android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse("https://new.c.mi.com/global/")
-                    )
-                    context.startActivity(intent)
+                    launchSearch("site:mi.com OR site:new.c.mi.com \"$model\" \"$codename\" official ROM firmware $region")
                 },
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("Открыть сообщество Xiaomi") }
+            ) {
+                Text("Искать официальные материалы Xiaomi")
+            }
         }
-        Text(
-            "Для Redmi Note 14 4G известен codename tanzanite. Региональные пакеты различаются. Сверяйте полный номер модели, codename, регион, тип пакета (Recovery/Fastboot) и контрольную сумму перед установкой.",
-            style = MaterialTheme.typography.bodySmall
-        )
+
+        ElevatedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Проверка перед загрузкой", style = MaterialTheme.typography.titleMedium)
+                Text("• Сверьте полный номер модели и код устройства.")
+                Text("• Сверьте регион/CSC и номер текущей сборки.")
+                Text("• Убедитесь, что пакет предназначен именно для этой модели.")
+                Text("• Recovery ROM и Fastboot ROM — разные типы пакетов.")
+                Text("• Проверяйте SHA-256 и источник загрузки.")
+                Text(
+                    "Поиск открывает результаты в браузере. Он не скачивает и не устанавливает прошивку автоматически; найденный файл нужно проверить вручную.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 
@@ -661,6 +754,34 @@ private fun SecurityScreen(
             }
         } else {
             Text("Подключите телефон через USB и авторизуйте ADB, чтобы прочитать его доступные свойства загрузчика.")
+        }
+        OutlinedButton(
+            onClick = {
+                val report = buildString {
+                    appendLine("AndroidToolByAsiman — диагностический отчёт")
+                    appendLine("Дата: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
+                    appendLine()
+                    appendLine("ТЕЛЕФОН С ПРИЛОЖЕНИЕМ")
+                    info.forEach { appendLine("${it.label}: ${it.value}") }
+                    appendLine()
+                    appendLine("ПОДКЛЮЧЁННЫЙ ТЕЛЕФОН (ADB)")
+                    if (remoteInfo.isEmpty()) appendLine("ADB-устройство не авторизовано.")
+                    else remoteInfo.forEach { appendLine("${it.label}: ${it.value}") }
+                    appendLine()
+                    appendLine("Примечание: отчёт содержит только данные, доступные приложению.")
+                }
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "AndroidToolByAsiman — диагностика")
+                    putExtra(Intent.EXTRA_TEXT, report)
+                }
+                context.startActivity(Intent.createChooser(send, "Поделиться отчётом"))
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Share, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Экспортировать диагностический отчёт")
         }
         ElevatedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
