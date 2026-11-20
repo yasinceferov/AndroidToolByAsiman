@@ -6,14 +6,14 @@ plugins {
 
 android {
     namespace = "com.asiman.androidtool"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.asiman.androidtool"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 7
+        versionName = "0.7.0"
     }
 
     buildFeatures { compose = true }
@@ -32,5 +32,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("com.github.Ernest-su:adb:v0.4.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -1,53 +1,59 @@
-# AndroidToolByAsiman — build APK with Termux + GitHub
+# Build AndroidToolByAsiman v0.7.0 from Termux + GitHub Actions
 
-## Recommended path: GitHub Actions (build happens on GitHub)
-You do not need a full Android SDK installed in Termux.
+## What v0.7.0 adds
+- ADB-over-USB Host connection to a second Android phone.
+- USB permission prompt on the Redmi host and RSA authorization prompt on the target phone.
+- Read-only model, Android version, build, security patch, ABI, battery, storage, and boot-state properties from the target phone.
+- Firmware lookup prefers the ADB-connected phone profile.
 
-1. Install Termux from its official F-Droid/GitHub distribution.
-2. Install Git:
-   pkg update && pkg upgrade
-   pkg install git
-3. Create a GitHub repository named AndroidToolByAsiman.
-4. Upload/push the project files so the repository root contains:
-   settings.gradle.kts
-   build.gradle.kts
-   gradle.properties
-   app/
-   .github/workflows/build-apk.yml
-5. In Termux, clone your repository (replace YOUR_NAME):
-   git clone https://github.com/YOUR_NAME/AndroidToolByAsiman.git
-   cd AndroidToolByAsiman
-6. If you make edits locally, commit and push:
-   git add .
-   git commit -m "Update AndroidToolByAsiman"
-   git push
-7. On GitHub open Actions -> Build AndroidToolByAsiman APK -> Run workflow.
-   A push to main also starts a build automatically.
-8. Open the completed workflow run -> Artifacts -> AndroidToolByAsiman-debug.
-   Download and extract the APK on your phone.
+## Update an existing clone
+1. Download `AndroidToolByAsiman_v0_7_0_ADB_Host.zip` to the phone's `Download` folder.
+2. In Termux, allow storage access once:
 
-## Optional: build locally in Termux
-A local Android Gradle build on a phone is more fragile and may fail due to
-RAM, storage, native build tools, or Android SDK setup. GitHub Actions is the
-recommended reproducible build path. Do not run random curl|bash install scripts.
+```bash
+termux-setup-storage
+```
 
-## Current implementation status
-This repository is a starter prototype. It currently includes device-information
-display, USB device discovery, firmware web search, file selection and SHA-256
-calculation. It does NOT yet implement a complete ADB host, Fastboot host,
-bootloader unlock, or actual partition flashing. The GitHub workflow builds the
-current project; it does not magically add those capabilities.
+3. Extract the project over the existing clone:
 
-Before flashing any device, verify exact model/codename, region, partition layout,
-image signature/hash, battery level, and a recovery path. Flashing the wrong
-image can permanently brick a device. Unlocking normally wipes user data.
+```bash
+cd ~
+unzip -o ~/storage/downloads/AndroidToolByAsiman_v0_7_0_ADB_Host.zip -d ~
+cd ~/AndroidToolByAsiman
+```
 
-## v0.5.0 USB test
-1. Install the debug APK on the host phone.
-2. Open USB tab before connecting the target, then connect using a data-capable OTG adapter/cable.
-3. Tap **Обновить USB** and verify that a device appears.
-4. Tap **Запросить разрешение Android** and approve the system dialog.
-5. Verify VID/PID and interface details appear. Repeat with the target in normal Android, Recovery and Fastboot modes if supported.
-6. Record host model, target model, USB mode, VID/PID, interface class/subclass/protocol and whether permission was granted.
+4. Commit and push:
 
-This test only validates USB enumeration and permission. It does not validate ADB authentication, Fastboot commands or flashing.
+```bash
+git status
+git add -A
+git commit -m "Add USB ADB connected-device diagnostics v0.7.0"
+git push origin main
+```
+
+If Git says `nothing to commit`, stop and check that the ZIP was extracted to `~/` and that `~/AndroidToolByAsiman/app/src/main/java/com/asiman/androidtool/MainActivity.kt` contains `Подключить телефон через ADB`.
+
+## Download the APK
+1. Open the repository on GitHub.
+2. Open **Actions** and select the newest `Build AndroidToolByAsiman APK` run.
+3. Wait for every step to finish successfully.
+4. Under **Artifacts**, download `AndroidToolByAsiman-v0.7.0-debug` and extract `app-debug.apk`.
+
+The APK is not ready until GitHub Actions reports a successful build. This source archive has not been built on the target Redmi phone yet.
+
+## Connect a second phone
+1. On the second phone, enable Developer options and USB debugging.
+2. Connect the second phone to the Redmi host with a data-capable OTG adapter/cable.
+3. Open AndroidToolByAsiman → **USB**.
+4. Grant Android's USB permission if prompted.
+5. Press **Подключить телефон через ADB**.
+6. Unlock the second phone and approve the RSA debugging fingerprint.
+7. Read the separate **Подключённый телефон (ADB)** panel.
+
+If no ADB interface appears, change the second phone's USB mode/cable, ensure USB debugging is on, then disconnect/reconnect. Some OEM builds do not expose USB ADB in every USB mode.
+
+## Limits
+- No Fastboot flashing or partition writing.
+- No bootloader/FRP/screen-lock bypass.
+- ADB properties are read-only. Missing OEM properties are shown as unavailable, not guessed.
+- Unlocking the bootloader must use the manufacturer's official process and can erase data.

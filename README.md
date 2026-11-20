@@ -1,88 +1,33 @@
-# AndroidToolByAsiman
+# AndroidToolByAsiman v0.7.0
 
-Стартовый проект Android Studio на Kotlin + Jetpack Compose.
+Android diagnostics utility with separate host-phone and ADB-connected-phone information.
 
-## Что уже есть
-- Определение производителя, модели, codename/device, Android, SDK, build fingerprint/display и ABI.
-- Оценка свободного/общего пространства и процента батареи (если API сообщает значение).
-- Просмотр USB-устройств, обнаруженных Android USB Host API.
-- Экран-подготовка для поиска прошивок и проверки безопасности.
+## Device modes
+- **Host phone**: Android properties of the phone running this app.
+- **Connected phone**: USB Host discovery and ADB over USB. Enable USB debugging on the target phone, connect it with a data cable/OTG adapter, grant the USB permission in AndroidToolByAsiman, press **Connect phone via ADB**, then approve the RSA debugging key on the target phone.
+- Once ADB is connected, the app reads the target phone's manufacturer, model, device/product codename, Android version/SDK, build ID/fingerprint, security patch, ABI list, battery percentage, and `/data` storage estimate. It also reads boot-state properties where exposed by the OEM.
 
-## Сборка APK
-1. Установите Android Studio (JDK 17).
-2. Откройте эту папку как проект.
-3. Дождитесь синхронизации Gradle.
-4. Выберите Build -> Build Bundle(s) / APK(s) -> Build APK(s).
-5. APK появится в `app/build/outputs/apk/debug/`.
+## Other features
+- USB VID/PID, manufacturer/product strings, interface and endpoint diagnostics.
+- Heuristic ADB/Fastboot interface identification.
+- Firmware lookup uses the connected target profile when ADB is connected; otherwise it uses the host phone.
+- Firmware file selection and SHA-256 verification.
+- Read-only security/boot-state information and links to Xiaomi's official unlock instructions.
 
-## Важные ограничения
-- APK не может универсально обходить bootloader, FRP, экранную блокировку или защиту производителя.
-- Android не раскрывает всем приложениям состояние загрузчика/root и полный набор системных данных.
-- USB Host API показывает обнаруженные USB-устройства, но само по себе не реализует ADB/Fastboot.
-- Для ADB/Fastboot между телефонами потребуется отдельная реализация протокола, совместимый USB OTG-адаптер, разрешения пользователя и тестирование на конкретных моделях.
-- Поиск и установка прошивок должны сверять точную модель, codename, регион, загрузчик, подпись и контрольную сумму.
-- Проект не содержит эксплойтов, обхода блокировок или автоматической прошивки.
+## Limitations
+- This release does not flash partitions and does not implement Fastboot write/flash operations.
+- Fastboot is identified from USB descriptors only; it is not a complete Fastboot client.
+- Bootloader bypass, FRP bypass, screen-lock bypass, exploit-based unlocking, and unauthorized access are not supported.
+- ADB requires USB debugging, a data-capable cable, USB Host support, USB permission, and RSA authorization. Some OEMs may restrict properties or commands.
+- Bootloader properties can be missing or vendor-dependent; an unavailable value is not proof of lock/unlock state.
 
-## Следующие этапы
-1. Добавить экран уровня патчей безопасности и проверку известных CVE по версии/патчу.
-2. Реализовать поиск официальных страниц прошивок по производителю и codename.
-3. Добавить экспорт отчёта диагностики.
-4. Разработать отдельный USB-компонент ADB/Fastboot с безопасным allowlist-команд и подтверждением действий.
-5. Добавить backup-предупреждения и проверку целостности образов перед прошивкой.
+## Build requirements
+- JDK 17
+- Android SDK Platform 36 and Build Tools 36.0.0
+- Gradle 8.13 / Android Gradle Plugin 8.13.2
+- Kotlin 2.2.21
 
+The app consumes the Apache-2.0 `Ernest-su/adb` library (`com.github.Ernest-su:adb:v0.4.0`) through JitPack for ADB USB transport and RSA authentication.
 
-## Добавлено в обновлении
-- Экран Flash Manager.
-- Выбор локального файла через системный picker.
-- Расчёт SHA-256 и копирование хеша.
-- Поиск прошивки в браузере по модели и codename.
-- Отображение уровня патча безопасности Android.
-- Расширенная навигация приложения.
-
-## Что пока НЕ реализовано
-Реальная запись разделов через Fastboot/fastbootd и полноценный ADB Host ещё не входят в эту сборку. USB Host обнаруживает подключённые USB-устройства, но это не означает, что телефон уже умеет выполнять fastboot flash. Для реального прошивания потребуется интегрировать и проверить USB Fastboot Host-стек, обработку vendor-specific команд, выбор разделов и проверку совместимости. Нельзя обещать поддержку всех Android-устройств одним универсальным способом.
-
-Приложение не выполняет обходы блокировок или эксплуатацию уязвимостей. Оно рассчитано на устройства, которыми владеет пользователь или на обслуживание которых у него есть разрешение.
-
-
-## Build APK using Termux + GitHub
-See `BUILD_WITH_TERMUX_AND_GITHUB.md`. The repository includes a GitHub Actions
-workflow at `.github/workflows/build-apk.yml` that builds a debug APK and
-publishes it as a downloadable workflow artifact.
-
-## Device compatibility note
-The app can gather standard Android device properties on many devices. USB OTG,
-ADB and Fastboot host operation depends on the controller, Android version,
-USB permissions, target boot mode and OEM implementation. A universal
-bootloader unlock or universal flashing support cannot be guaranteed.
-
-
-## Redmi Note 14 4G test profile
-- Adds best-effort detection for the Redmi Note 14 4G family.
-- Recognizes the known base codename `tanzanite`, but prefers live `Build.DEVICE` / `Build.PRODUCT` values.
-- Detects common Xiaomi ROM region suffixes from the build display/fingerprint.
-- Firmware search query includes the device family, codename and detected region.
-- See `REDMI_NOTE_14_4G_TEST_PLAN.md` for a hardware test checklist.
-
-This is still not a completed ADB/Fastboot flasher. No partition write, bootloader unlock,
-FRP bypass or exploit functionality is included in this build.
-
-
-## Reference implementation for Android-to-Android flashing
-A public Kotlin project named Leaf Flasher demonstrates USB OTG Fastboot/FastbootD,
-ADB sideload and ROM payload handling. It is a separate project and is not bundled
-or copied into AndroidToolByAsiman. It can be reviewed as an architectural reference:
-https://github.com/devvsid/LeafFlasher
-
-Before reusing any source, preserve its Apache-2.0 license, NOTICE and third-party
-licenses. A future integration should be reviewed module-by-module and tested on
-real devices rather than blindly copying a complete flasher.
-
-## USB Host diagnostics in v0.5.0
-- Requests Android USB permission per connected device using `UsbManager.requestPermission`.
-- Displays VID/PID, manufacturer/product strings, device class, USB version, interface count and interface class/subclass/protocol.
-- Adds heuristic labels for common ADB (`ff/66/01`) and Fastboot (`ff/66/03`) interface descriptors. These labels are informational only and are not protocol handshakes.
-- Does not claim that a device is flashable, does not claim a successful ADB/Fastboot connection, and does not send USB transfers or write partitions.
-- No MediaTek Preloader/BROM operation is implemented.
-
-The USB Host permission and enumeration flow follows the Android Developers USB Host guidance: https://developer.android.com/develop/connectivity/usb/host
+## GitHub Actions
+Push to `main`; open **Actions** and download artifact `AndroidToolByAsiman-v0.7.0-debug` after a successful build.
